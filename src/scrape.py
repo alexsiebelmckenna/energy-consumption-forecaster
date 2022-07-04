@@ -1,11 +1,20 @@
-from selenium import webdriver
-from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
+# Scrapes weather website for hourly Seoul weather data
 
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from utils import *
+
+import datetime
 import pandas as pd
 import pdb
 import time
 import urllib3
+
+start = time.time()
 
 driver = webdriver.Chrome(ChromeDriverManager().install())
 
@@ -20,47 +29,49 @@ pressure_list = []
 precip_list = []
 condition_list = []
 
+spec_name=[]
+spec_item=[]
 
-driver.get("https://www.wunderground.com/history/daily/RKSS/date/2016-11-1"+"?type=submit%20value%3DView")
+dates = listdir_remove("../data/enertalk-dataset/00/")
 
-time.sleep(15)
+for date in dates:
+    date_str = '-'.join([date[:4], date[4:6], date[6:]])
 
-print(driver.find_element_by_xpath("//table[@class='mat-table cdk-table mat-sort ng-star-inserted']").text)
+    print(f"Scraping weather data for {date_str} | File {dates.index(date)+1}/{len(dates)}")
 
-pdb.set_trace()
+    driver.get("https://www.wunderground.com/history/daily/RKSS/date/"+date_str+"?type=submit%20value%3DView")
 
-#print(driver.find_element_by_xpath("//table[@class='mat-table cdk-table mat-sort ng-star-inserted']").text)
+    time.sleep(15)
 
-#print(len(cells))
+    # Initialize empty DataFrame if first iteration
+    if (dates.index(date) == 0):
+        daily_obs_table = pd.read_html(
+            driver.find_element_by_xpath(
+                "//table[@class='mat-table cdk-table mat-sort ng-star-inserted']"
+            ).get_attribute(
+                "outerHTML"
+            )
+        )[0].dropna(
+            axis=0
+        )
+        daily_obs_table["date"] = str(date)
+    else:
+        table = pd.read_html(
+            driver.find_element_by_xpath(
+                "//table[@class='mat-table cdk-table mat-sort ng-star-inserted']"
+            ).get_attribute(
+                "outerHTML"
+            )
+        )[0].dropna(
+            axis=0
+        )
+        table["date"] = str(date)
+        daily_obs_table = pd.concat([daily_obs_table, table])
 
-#content = driver.page_source
+daily_obs_table.to_csv("../data/intermediate/weather_00.csv")
 
+end = time.time()
 
+time_elapsed = end - start
 
-#time.sleep(10)
-
-#soup = BeautifulSoup(content, 'html.parser')
-
-# class list set
-#class_list = set()
-
-# get all tags
-##tags = {tag.name for tag in soup.find_all()}
-  
-# iterate all tags
-#for tag in tags:
-  
-    # find all element of tag
- #   for i in soup.find_all( tag ):
-  
-        # if tag has attribute of class
-#        if i.has_attr( "class" ):
-  
-#            if len( i['class'] ) != 0:
- #               class_list.add(" ".join( i['class']))
-  
-#print(class_list)
-
-
-#for a in soup.findAll('a', href=True, attrs={'class':'_31qSD5'}):
-#    name=a.find('div', attrs={'class':'_3wU53n'})
+print(f"Time elapsed: {str(datetime.timedelta(seconds=time_elapsed))}")
