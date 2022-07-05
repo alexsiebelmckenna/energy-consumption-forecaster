@@ -1,7 +1,15 @@
 import pandas as pd
+import numpy as np
 import pdb
 from utils import *
 from datetime import datetime
+
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+from utils import *
 
 weather = pd.read_csv(
     "../data/intermediate/weather_00.csv"
@@ -40,7 +48,7 @@ weather_24 = weather[
     )
 ]
 
-# Check which days have greater than 24 readings
+# Get the readings of the days with greater than 24 readings
 weather_gt24 = weather[
     weather[
         "date"
@@ -57,25 +65,44 @@ weather_gt24 = weather[
     )
 ]
 
-
-
 # See if there's a reading for each hour on the hour for every date
-grouped_weather_gt24 = weather_gt24.groupby(
-    ["date", "hour"]
-).apply(
-    lambda x: (
-        x["minute"]==0
-    ).sum()
-).reset_index().rename(
-    {0:"on_the_hour"}, 
+weather_gt24.groupby(["date", "hour"]).size().reset_index().rename({0:"count"}, axis=1)
+
+dates_weather_gt24 = list(weather_gt24["date"].unique())
+
+for date in dates_weather_gt24:
+    if dates_weather_gt24.index(date) == 0:
+        min_datetime = weather_gt24[weather_gt24["date"] == date]["Datetime"].min()
+        date_range_weather_gt24_df = pd.date_range(min_datetime, periods = 24, freq='1h').to_series()
+    else:
+        min_datetime = weather_gt24[weather_gt24["date"] == date]["Datetime"].min()
+        date_range_weather_gt24_df = date_range_weather_gt24_df.append(pd.date_range(min_datetime, periods = 24, freq='1h').to_series())
+
+
+date_range_weather_gt24_df = pd.DataFrame(date_range_weather_gt24_df.reset_index(drop=True).rename({"index":"Datetime"}, axis=1)).rename({0:"Datetime"}, axis=1)
+
+date_range_weather_gt24_df["date"] = date_range_weather_gt24_df["Datetime"].dt.date.apply(lambda x: int(str(x).replace('-', '')))
+date_range_weather_gt24_df["hour"] = date_range_weather_gt24_df["Datetime"].apply(lambda x: x.hour)
+date_range_weather_gt24_df["minute"] = date_range_weather_gt24_df["Datetime"].apply(lambda x: x.minute)
+
+
+date_range_weather_gt24_df = pd.merge(date_range_weather_gt24_df, weather_gt24, how="outer", on=["date", "hour"], indicator=True)
+
+# Hourly readings missing from weather_gt24
+# In the case of House 00, only one: 2016-11-06 17:00:00
+readings_to_scrape_gt24 = date_range_weather_gt24_df[
+    date_range_weather_gt24_df["_merge"] == "left_only"
+].rename(
+    {
+        "Datetime_x":"Datetime"
+    }, 
     axis=1
-)
+)["Datetime"]
 
-pdb.set_trace()
+subset_weather_gt24 = weather_gt24.drop_duplicates(subset=["date", "hour"], keep="first")
 
-
-# Check which days have fewer than 24 readings
-weather_ft24 = weather[
+# Get the readings of the days with less than 24 readings
+weather_lt24 = weather[
     weather[
         "date"
     ].isin(
@@ -91,4 +118,35 @@ weather_ft24 = weather[
     )
 ]
 
+dates_lt24 = weather_lt24["date"].unique()
+
+if len(dates_lt24) == 1:
+    date_lt24 = dates_lt24[0]
+    min_datetime = weather_lt24[weather_lt24["date"]==date_lt24]["Datetime"].min()
+    date_range_weather_lt24_df = pd.DataFrame(pd.date_range(min_datetime, periods = 24, freq='1h')).rename({0:"Datetime"}, axis=1)
+    date_range_weather_lt24_df = pd.merge(date_range_weather_lt24_df, weather_lt24, on=["Datetime"], how="outer", indicator=True)
+    readings_to_scrape_lt24 = date_range_weather_lt24_df[date_range_weather_lt24_df["_merge"]=="left_only"]["Datetime"]
+else:
+    for date in dates_lt24:
+        if dates_lt24.index(date) == 0:
+            min_datetime = weather_lt24[weather_lt24["date"]==date_lt24]["Datetime"].min()
+            date_range_weather_lt24 = pd.date_range(min_datetime, periods = 24, freq='1h').to_series
+        else:
+            min_datetime = weather_lt24[weather_lt24["date"] == date]["Datetime"].min()
+            date_range_weather_lt24 = date_range_weather_lt24.append(pd.date_range(min_datetime, periods = 24, freq='1h').to_series())
+    date_range_weather_lt24_df = pd.DataFrame(date_range_weather_lt24).rename({0:"Datetime"}, axis=1)
+    date_range_weather_lt24_df = pd.merge(date_range_weather_lt24_df, weather_lt24, on=["Datetime"], how="outer", indicator=True)
+    readings_to_scrape_lt24 = date_range_weather_lt24_df[date_range_weather_lt24_df["_merge"]=="left_only"]["Datetime"]
+
+readings_to_scrape = pd.concat([readings_to_scrape_lt24, readings_to_scrape_gt24]).reset_index(drop=True)
+
+weather = weather_24.append(weather_lt24).append(subset_weather_gt24)
+
+# Start cleaning the weather data
+weather["wind_speed_int"] = weather["Wind Speed"].astype('str').str.extractall('(\d+)').unstack().fillna('').sum(axis=1).astype(int)
+weather["pressure_int"] = weather["Pressure"].astype('str').str.extractall('(\d+)').unstack().fillna('').sum(axis=1).astype(int)
+
+
+
+pdb.set_trace()
 
