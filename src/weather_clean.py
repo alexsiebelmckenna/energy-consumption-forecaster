@@ -143,10 +143,29 @@ readings_to_scrape = pd.concat([readings_to_scrape_lt24, readings_to_scrape_gt24
 weather = weather_24.append(weather_lt24).append(subset_weather_gt24)
 
 # Start cleaning the weather data
-weather["wind_speed_int"] = weather["Wind Speed"].astype('str').str.extractall('(\d+)').unstack().fillna('').sum(axis=1).astype(int)
-weather["pressure_int"] = weather["Pressure"].astype('str').str.extractall('(\d+)').unstack().fillna('').sum(axis=1).astype(int)
+
+# Subset data to get around missing data issue
+weather = weather[weather["Datetime"]>"2016-11-11 23:00:00"]
+
+weather["wind_speed_int"] = weather["Wind Speed"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
+weather["pressure_float"] = weather["Pressure"].astype("str").str.extract(r"[+-]?((\d+\.\d*)|(\.\d+)|(\d+))([eE][+-]?\d+)?")[0]
+weather["temp_int"] = weather["Temperature"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
+weather["dew_point_int"] = weather["Temperature"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
+weather["humidity_int"] = weather["Humidity"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
+weather["wind_gust_int"] = weather["Wind Gust"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
+weather["wind_direction_cat"] = weather["Wind"]
+weather["condition_cat"] = weather["Condition"]
+
+subset_weather = weather[
+    [
+        "Datetime", "hour", "temp_int", "dew_point_int", "humidity_int", "condition_cat", "wind_direction_cat", "wind_speed_int", 
+        "wind_gust_int", "pressure_float"
+    ]
+]
+
+subset_weather.to_csv("../data/intermediate/weather_clean.csv")
 
 
 
-pdb.set_trace()
+
 
