@@ -1,6 +1,5 @@
 # Scrapes weather website for hourly Seoul weather data
 
-from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -10,27 +9,11 @@ from utils import *
 
 import datetime
 import pandas as pd
-import pdb
 import time
-import urllib3
 
 start = time.time()
 
 driver = webdriver.Chrome(ChromeDriverManager().install())
-
-time_list = [] 
-temp_list = [] 
-dew_point_list = [] 
-humidity_list = []
-wind_list = []
-wind_speed_list = []
-wind_gust_list = []
-pressure_list = []
-precip_list = []
-condition_list = []
-
-spec_name=[]
-spec_item=[]
 
 dates = listdir_remove("../data/enertalk-dataset/00/")
 

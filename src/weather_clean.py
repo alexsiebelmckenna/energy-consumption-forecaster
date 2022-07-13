@@ -144,9 +144,6 @@ weather = weather_24.append(weather_lt24).append(subset_weather_gt24)
 
 # Start cleaning the weather data
 
-# Subset data to get around missing data issue
-weather = weather[weather["Datetime"]>"2016-11-11 23:00:00"]
-
 weather["wind_speed_int"] = weather["Wind Speed"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)
 weather["pressure_float"] = weather["Pressure"].astype("str").str.extract(r"[+-]?((\d+\.\d*)|(\.\d+)|(\d+))([eE][+-]?\d+)?")[0]
 weather["temp_int"] = weather["Temperature"].astype("str").str.extractall("(\d+)").unstack().fillna('').sum(axis=1).astype(int)

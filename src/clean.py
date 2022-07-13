@@ -1,10 +1,12 @@
-from os import listdir
-
 import datetime
+import functools as ft
+import glob
 import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
+import os
 import pandas as pd
+import pdb
 import pickle
 import pyarrow
 import re
@@ -12,15 +14,28 @@ import seaborn
 import sys
 import time
 
-def listdir_remove(path, string='.DS_Store', sort=True):
-    # List directories in path and remove string(s) if string(s) exist in directory list
-    # Intended for OS-specific files (e.g. .DS_Store on Macs, which is the default)
-    listed = listdir(path)
-    if string in listed:
-        listed.remove(string)
-    if sort:
-        listed = sorted(listed)
-    return listed
+from os import listdir
+from utils import *
+
+active_power_aliases = {
+    "total":"ap_total",
+    "TV":"ap_TV",
+    "washing-machine":"ap_washing-machine",
+    "rice-cooker":"ap_rice-cooker",
+    "water-purifier":"ap_water-purifier",
+    "microwave": "ap_microwave",
+    "kimchi-fridge":"ap_kimchi-fridge"
+}
+
+reactive_power_aliases = {
+    "total":"rp_total",
+    "TV":"rp_TV",
+    "washing-machine":"rp_washing-machine",
+    "rice-cooker":"rp_rice-cooker",
+    "water-purifier":"rp_water-purifier",
+    "microwave": "rp_microwave",
+    "kimchi-fridge":"rp_kimchi-fridge"
+}
 
 def data_process(path, house, date, file):
     file_num = re.findall(r'(.*?)\_', file)[0]
@@ -29,7 +44,7 @@ def data_process(path, house, date, file):
         path + house + '/' + date + '/' + file
     )
     # Format timestamp column
-    data['timestamp'] = data['timestamp'].apply(lambda x: datetime.datetime.fromtimestamp(x/1000.))
+    data['Datetime'] = data['timestamp'].apply(lambda x: datetime.datetime.fromtimestamp(x/1000.))
     # Add house column
     data['house'] = house
     # Add appliance column
@@ -41,7 +56,7 @@ def data_process(path, house, date, file):
         data['appliance'] = 'fridge_2'
     return data
 
-def gather_data(path):
+def gather_and_dump_data(path):
     # Start time
     start = time.time()
     
@@ -73,6 +88,99 @@ def gather_data(path):
     end = time.time()
     time_elapsed = end - start
     print(f"Time elapsed: {str(datetime.timedelta(seconds=time_elapsed))}")
-    return raw
 
-raw = gather_data('../data/enertalk-dataset/')
+def load_pickles():
+    # Changes directory to src
+    abspath = os.path.abspath(__file__)
+    dname = os.path.dirname(abspath)
+    os.chdir(dname)
+
+    files = glob.glob("../data/intermediate/00_*.pkl")
+
+    start = time.time()
+    df = pd.concat([pd.read_pickle(fp) for fp in files], ignore_index=True)
+    end = time.time()
+    print(f"Total time elapsed (to load and concatenate pickled electricity consumption data files): {str(datetime.timedelta(seconds = end - start))}")
+    return df
+
+def load_weather_data(weather_path="../data/intermediate/weather_clean.csv"):
+    start = time.time()
+    weather = pd.read_csv(weather_path).drop(
+        "Unnamed: 0", 
+        axis=1
+    )
+    weather["Datetime"] = pd.to_datetime(weather["Datetime"])
+    weather = weather.set_index("Datetime")
+    end = time.time()
+    print(f"Total time elapsed (to load weather data): {str(datetime.timedelta(seconds = end - start))}")
+    return weather
+
+def merge_and_clean(df, df_weather):
+    df_merged = pd.merge(df, df_weather, on="Datetime", how="left")
+    return df_merged
+
+def resample_df(df, appliance, ap_dict=active_power_aliases, rp_dict=reactive_power_aliases):
+    ap_column_name_str = ap_dict[appliance]
+    rp_column_name_str = rp_dict[appliance]
+    df = df[
+        df[
+            "appliance"
+        ] == appliance
+    ].set_index(
+        "Datetime"
+    ).resample(
+        "1h"
+    ).mean(
+    ).drop(
+        "timestamp", 
+        axis=1
+    ).rename(
+        {
+            "active_power":ap_column_name_str,
+            "reactive_power":rp_column_name_str
+        },
+        axis=1
+    )
+    return df
+
+def add_date_features(df):
+    df["date"] = df.index.date
+    df["month"] = df.index.month
+    df["day"] = df.index.day
+    df["hour"] = df.index.hour
+    return df
+
+print("Gathering and dumping data...")
+gather_and_dump_data("../data/enertalk-dataset/")
+print("Loading pickled data...")
+df = load_pickles()
+print("***Resampling data to 1 hour intervals...***")
+print("Resampling \"total\" data to 1 hour intervals...")
+df_resampled_total = resample_df(df=df, appliance="total")
+print("Resampling \"TV\" data to 1 hour intervals...")
+df_resampled_TV = resample_df(df=df, appliance="TV")
+print("Resampling \"washing machine\" data to 1 hour intervals...")
+df_resampled_washing_machine = resample_df(df=df, appliance="washing-machine")
+print("Resampling \"rice cooker\" data to 1 hour intervals...")
+df_resampled_rice_cooker = resample_df(df=df, appliance="rice-cooker")
+print("Resampling \"water purifier\" data to 1 hour intervals...")
+df_resampled_water_purifier = resample_df(df=df, appliance="water-purifier")
+print("Resampling \"microwave\" data to 1 hour intervals...")
+df_resampled_microwave = resample_df(df=df, appliance="microwave")
+print("Resampling \"kimchi fridge\" data to 1 hour intervals...")
+df_resampled_kimchi_fridge = resample_df(df=df, appliance="kimchi-fridge")
+dfs = [
+    df_resampled_total, df_resampled_TV, df_resampled_washing_machine,
+    df_resampled_rice_cooker, df_resampled_water_purifier, df_resampled_microwave,
+    df_resampled_kimchi_fridge
+]
+print("Merging \"total\" data with \"appliance\" data...")
+df_resampled = ft.reduce(lambda left, right: pd.merge(left, right, on="Datetime", how="left"), dfs)
+print("Loading weather data...")
+df_weather = load_weather_data()
+print("Merging household energy consumption data and weather data...")
+df_merged = merge_and_clean(df=df_resampled, df_weather=df_weather)
+print("Adding additional features...")
+df_merged = add_date_features(df_merged)
+print("Saving file...")
+df_merged.to_csv("../data/intermediate/df_00.csv")
