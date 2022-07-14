@@ -1,2 +1,2 @@
-# Energy Consumption Forecaster
-Forecasts hourly household-level energy consumption, given various meteorological and engineering features. WIP
+# Energy consumption forecaster
+Uses household energy consumption data to predict how much a given household will require at a given point in time
