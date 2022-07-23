@@ -44,7 +44,13 @@ df = df.set_index("Datetime")
 
 # Create on/off variables; one hot encode 
 
-def on_off_indicator(df, appliance, threshold=15, onoff_dict=onoff_indicator_aliases, ap_dict=active_power_aliases):
+def on_off_indicator(
+    df, 
+    appliance, 
+    threshold=15, 
+    onoff_dict=onoff_indicator_aliases, 
+    ap_dict=active_power_aliases
+):
 
     if appliance=="total":
         print("Can only provide on/off indicator for an appliance.")
@@ -174,7 +180,6 @@ def apply_fill_missing_vals(df, colnames):
 numeric_columns = df.select_dtypes(include=[np.float, np.int]).columns
 
 df = apply_fill_missing_vals(df, colnames=numeric_columns)
-
 
 df = on_off_indicator(df=df, appliance="TV")
 df = on_off_indicator(df=df, appliance="washing-machine")
