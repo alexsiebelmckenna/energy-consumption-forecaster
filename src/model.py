@@ -1,36 +1,31 @@
-from gc import callbacks
-from random import shuffle
+import datetime
+import keras_tuner as kt
+import numpy as np
+import os
 import pandas as pd
 import pdb
-import datetime
-import numpy as np
 import time
 
-from keras import backend
 from keras.activations import relu
-from keras.callbacks import Callback, LearningRateScheduler, ReduceLROnPlateau
+from keras.callbacks import ReduceLROnPlateau
+from keras.layers import Dense, LSTM
 from keras.metrics import RootMeanSquaredError, Accuracy
 from keras.models import Sequential
-from keras.layers import Activation
-from keras.layers import Dense
-from keras.layers import Dropout
-from keras.layers import Flatten
-from keras.layers import Reshape
-from keras.regularizers import L1L2
-from tensorflow.keras.optimizers import Adam
-
-
-from keras.layers import LSTM
-from keras.layers import Input
-
-from keras.utils.generic_utils import get_custom_objects
-
+from keras.regularizers import L1, L2, L1L2
 from matplotlib import pyplot
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from keras.layers import Dropout
+from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
+from tensorflow.keras.optimizers import Adam
 
-import keras_tuner as kt
+# Changes directory to src
+abspath = os.path.abspath(__file__)
+dname = os.path.dirname(abspath)
+os.chdir(dname)
+
+from utils import *
+
+# Change back to project root directory
+os.chdir("../")
 
 sk_holidays = []
 
@@ -63,35 +58,17 @@ sk_holidays = [
 df["holiday"] = df.index.floor("d").isin(sk_holidays)
 df["holiday"] = df["holiday"].apply(lambda x: int(x))
 
-def create_lags(df, colname, num_lags):
-    for lag in range(1, num_lags+1):
-        new_colname = colname + "_(t-" + str(lag) + ")"
-        df[new_colname] = df[colname].shift(lag).fillna(0)
-    return df
-
-def EncodeCyclical(df, colname):
-    max_val = df[colname].max()
-    df["sin_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
-    df["cos_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
-    df.drop(colname, axis=1)
-    return df
-
 df = EncodeCyclical(df, "hour")
 df = EncodeCyclical(df, "day")
 df = EncodeCyclical(df, "month")
 
-#def PlotLearningCurve(Callback):
-#    def on_training_begin(self, logs=None):
-
-#    def on_epoch_end(self, logs=None):
-
-df = create_lags(df, "ap_total", 5)
-df = create_lags(df, "ap_TV", 5)
-df = create_lags(df, "ap_washing-machine", 5)
-df = create_lags(df, "ap_rice-cooker", 5)
-df = create_lags(df, "ap_water-purifier", 5)
-df = create_lags(df, "ap_microwave", 5)
-df = create_lags(df, "ap_kimchi-fridge", 5)
+df = CreateLags(df, "ap_total", 5)
+df = CreateLags(df, "ap_TV", 5)
+df = CreateLags(df, "ap_washing-machine", 5)
+df = CreateLags(df, "ap_rice-cooker", 5)
+df = CreateLags(df, "ap_water-purifier", 5)
+df = CreateLags(df, "ap_microwave", 5)
+df = CreateLags(df, "ap_kimchi-fridge", 5)
 
 # Drop indicator variables
 df = df[df.columns.drop(list(df.filter(regex="i_")))]
@@ -122,14 +99,6 @@ X = df_arr[:,1:]
 
 time_features_colnum = [int(i)-1 for i in time_features_colnum]
 
-def RangeList(n):
-    return list(range(n))
-
-def RemoveItem(item_list, full_list):
-    for item in item_list:
-        full_list.remove(item)
-    return full_list
-
 # Get number of numeric columns in X
 num_num_cols = X.shape[1]-df_cats_arr.shape[1]+1
 
@@ -144,7 +113,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # Feature scaler
-f_scaler = StandardScaler()
+f_scaler = MinMaxScaler()
 X_train[
     :, num_cols_excl_time
 ] = f_scaler.fit_transform(
@@ -157,13 +126,13 @@ X_train[
 # Only need to transform test dataset because scaling parameters from training dataset are used
 X_test[
     :, num_cols_excl_time
-] = f_scaler.fit_transform(
+] = f_scaler.transform(
     X_test[
         :, 
         num_cols_excl_time
     ]
 )# Target scaler
-t_scaler = StandardScaler()
+t_scaler = MinMaxScaler()
 y_train = t_scaler.fit_transform(y_train.reshape(-1, 1))
 # Only need to transform test dataset because scaling parameters from training dataset are used
 y_test = t_scaler.transform(y_test.reshape(-1, 1))
@@ -179,8 +148,7 @@ def build_model(
     X_train=X_train,
     y_train=y_train,
 ):
-    #, neurons1, neurons2, batch_size
-
+    
     num_lstm_layers = hp.Int(
         "num_lstm_layers",
         min_value=1,
@@ -197,107 +165,288 @@ def build_model(
         max_value=512, 
         step=16
     )
-    model.add(
-        LSTM(
-            lstm_1_units, 
-            return_sequences=True,
-            dropout=hp.Float(
-                "dropout_rate", 
-                min_value=0.0, 
-                max_value=0.8, 
-                step=0.1
-            )
+    kernel_reg_lstm_1 = RegWrapper(
+        hp.Choice("kernel_lstm_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "kernel_lstm_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
         )
     )
-    if num_lstm_layers>1:
-        print("Adding second LSTM layer...")
+    bias_reg_lstm_1 = RegWrapper(
+        hp.Choice("bias_lstm_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float("bias_lstm_1_reg_value", min_value=0, max_value=0.5, step=0.01)
+    )
+    activity_reg_lstm_1 = RegWrapper(
+        hp.Choice("activity_lstm_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "activity_lstm_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    recurrent_reg_lstm_1 = RegWrapper(
+        hp.Choice("recurrent_lstm_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "recurrent_lstm_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    if num_lstm_layers == 1:
+        model.add(
+            LSTM(
+                lstm_1_units, 
+                return_sequences=False,
+                kernel_regularizer=kernel_reg_lstm_1,
+                bias_regularizer=bias_reg_lstm_1,
+                activity_regularizer=activity_reg_lstm_1,
+                recurrent_regularizer=recurrent_reg_lstm_1,
+                dropout=hp.Float(
+                    "lstm_1_dropout_rate", 
+                    min_value=0.0, 
+                    max_value=0.8, 
+                    step=0.1
+                )
+            )
+        )
+    if num_lstm_layers > 1:
+        model.add(
+            LSTM(
+                lstm_1_units, 
+                return_sequences=True,
+                kernel_regularizer=kernel_reg_lstm_1,
+                bias_regularizer=bias_reg_lstm_1,
+                activity_regularizer=activity_reg_lstm_1,
+                recurrent_regularizer=recurrent_reg_lstm_1,
+                dropout=hp.Float(
+                    "lstm_1_dropout_rate", 
+                    min_value=0.0, 
+                    max_value=0.8, 
+                    step=0.1
+                )
+            )
+        )
         lstm_2_units = hp.Int(
             "lstm_2_input_unit", 
             min_value=16, 
             max_value=512, 
             step=16
         )
+        kernel_reg_lstm_2 = RegWrapper(
+            hp.Choice("kernel_lstm_2_reg_type", ["l1", "l2", "l1l2"]), 
+            hp.Float(
+                "kernel_lstm_2_reg_value", 
+                min_value=0, 
+                max_value=0.5, 
+                step=0.01
+            )
+        )
+        bias_reg_lstm_2 = RegWrapper(
+            hp.Choice("bias_lstm_2_reg_type", ["l1", "l2", "l1l2"]), 
+            hp.Float(
+                "bias_lstm_2_reg_value", 
+                min_value=0, 
+                max_value=0.5, 
+                step=0.01)
+        )
+        activity_reg_lstm_2 = RegWrapper(
+            hp.Choice("activity_lstm_2_reg_type", ["l1", "l2", "l1l2"]), 
+            hp.Float(
+                "activity_lstm_2_reg_value", 
+                min_value=0, 
+                max_value=0.5, 
+                step=0.01
+            )
+        )
+        recurrent_reg_lstm_2 = RegWrapper(
+            hp.Choice("recurrent_lstm_2_reg_type", ["l1", "l2", "l1l2"]), 
+            hp.Float(
+                "recurrent_lstm_2_reg_value", 
+                min_value=0, 
+                max_value=0.5, 
+                step=0.01
+            )
+        )
+        print("Adding second LSTM layer...") 
         if num_lstm_layers==2:
             model.add(
                 LSTM(
                     lstm_2_units, 
                     return_sequences=False,
+                    kernel_regularizer=kernel_reg_lstm_2,
+                    bias_regularizer=bias_reg_lstm_2,
+                    activity_regularizer=activity_reg_lstm_2,
+                    recurrent_regularizer=recurrent_reg_lstm_2,
                     dropout=hp.Float(
-                        "dropout_rate", 
+                        "lstm_2_dropout_rate", 
                         min_value=0.0, 
                         max_value=0.8, 
                         step=0.1
                     )
                 )
             )
-        if num_lstm_layers!=2:
+        if num_lstm_layers>2:
             model.add(
                 LSTM(
                     lstm_2_units, 
                     return_sequences=True,
+                    kernel_regularizer=kernel_reg_lstm_2,
+                    bias_regularizer=bias_reg_lstm_2,
+                    activity_regularizer=activity_reg_lstm_2,
+                    recurrent_regularizer=recurrent_reg_lstm_2,
                     dropout=hp.Float(
-                        "dropout_rate", 
+                        "lstm_2_dropout_rate", 
                         min_value=0.0, 
                         max_value=0.8, 
                         step=0.1
                     )
                 )
             )
-    if num_lstm_layers>2:
-        print("Adding third LSTM layer...")
-        lstm_3_units = hp.Int(
-            "lstm_3_input_unit", 
-            min_value=16, 
-            max_value=512, 
-            step=16
-        )
-        if num_lstm_layers==3:
-            model.add(
-                LSTM(
-                    lstm_3_units, 
-                    return_sequences=False,
-                    dropout=hp.Float(
-                        "dropout_rate", 
-                        min_value=0.0, 
-                        max_value=0.8, 
-                        step=0.1
-                    )
+            print("Adding third LSTM layer...")
+            lstm_3_units = hp.Int(
+                "lstm_3_input_unit", 
+                min_value=16, 
+                max_value=512, 
+                step=16
+            )
+            kernel_reg_lstm_3 = RegWrapper(
+                hp.Choice("kernel_lstm_3_reg_type", ["l1", "l2", "l1l2"]), 
+                hp.Float(
+                    "kernel_lstm_3_reg_value", 
+                    min_value=0, 
+                    max_value=0.5, 
+                    step=0.01
                 )
             )
-        if num_lstm_layers!=3:
-            model.add(
-                LSTM(
-                    lstm_3_units, 
-                    return_sequences=True,
-                    dropout=hp.Float(
-                        "dropout_rate", 
-                        min_value=0.0, 
-                        max_value=0.8, 
-                        step=0.1
-                    )
+            bias_reg_lstm_3 = RegWrapper(
+                hp.Choice("bias_lstm_3_reg_type", ["l1", "l2", "l1l2"]), 
+                hp.Float(
+                    "bias_lstm_3_reg_value", 
+                    min_value=0, 
+                    max_value=0.5, 
+                    step=0.01
                 )
             )
-    if num_lstm_layers>3:
-        print("Adding fourth LSTM layer...")
-        lstm_4_units = hp.Int(
-            "lstm_4_input_unit", 
-            min_value=16, 
-            max_value=512, 
-            step=16
-        )
-        if num_lstm_layers==4:
-            model.add(
-                LSTM(
-                    lstm_4_units, 
-                    return_sequences=False,
-                    dropout=hp.Float(
-                        "dropout_rate", 
-                        min_value=0.0, 
-                        max_value=0.8, 
-                        step=0.1
-                    )
+            activity_reg_lstm_3 = RegWrapper(
+                hp.Choice("activity_lstm_3_reg_type", ["l1", "l2", "l1l2"]), 
+                hp.Float(
+                    "activity_lstm_3_reg_value", 
+                    min_value=0, 
+                    max_value=0.5, 
+                    step=0.01
                 )
             )
+            recurrent_reg_lstm_3 = RegWrapper(
+                hp.Choice("recurrent_lstm_3_reg_type", ["l1", "l2", "l1l2"]), 
+                hp.Float(
+                    "recurrent_lstm_3_reg_value", 
+                    min_value=0, 
+                    max_value=0.5, 
+                    step=0.01
+                )
+            )
+            if num_lstm_layers==3:
+                model.add(
+                    LSTM(
+                        lstm_3_units, 
+                        return_sequences=False,
+                        kernel_regularizer=kernel_reg_lstm_3,
+                        bias_regularizer=bias_reg_lstm_3,
+                        activity_regularizer=activity_reg_lstm_3,
+                        recurrent_regularizer=recurrent_reg_lstm_3,
+                        dropout=hp.Float(
+                            "lstm_3_dropout_rate", 
+                            min_value=0.0, 
+                            max_value=0.8, 
+                            step=0.1
+                        )
+                    )
+                )
+            if num_lstm_layers>3:
+                model.add(
+                    LSTM(
+                        lstm_3_units, 
+                        return_sequences=True,
+                        kernel_regularizer=kernel_reg_lstm_3,
+                        bias_regularizer=bias_reg_lstm_3,
+                        activity_regularizer=activity_reg_lstm_3,
+                        recurrent_regularizer=recurrent_reg_lstm_3,
+                        dropout=hp.Float(
+                            "lstm_3_dropout_rate", 
+                            min_value=0.0, 
+                            max_value=0.8, 
+                            step=0.1
+                        )
+                    )
+                )
+                print("Adding fourth LSTM layer...")
+                lstm_4_units = hp.Int(
+                    "lstm_4_input_unit", 
+                    min_value=16, 
+                    max_value=512, 
+                    step=16
+                )
+                kernel_reg_lstm_4 = RegWrapper(
+                    hp.Choice("kernel_lstm_4_reg_type", ["l1", "l2", "l1l2"]), 
+                    hp.Float(
+                        "kernel_lstm_4_reg_value", 
+                        min_value=0, 
+                        max_value=0.5, 
+                        step=0.01
+                    )
+                )
+                bias_reg_lstm_4 = RegWrapper(
+                    hp.Choice("bias_lstm_4_reg_type", ["l1", "l2", "l1l2"]), 
+                    hp.Float(
+                        "bias_lstm_4_reg_value", 
+                        min_value=0, 
+                        max_value=0.5, 
+                        step=0.01
+                    )
+                )
+                activity_reg_lstm_4 = RegWrapper(
+                    hp.Choice(
+                        "activity_lstm_4_reg_type", ["l1", "l2", "l1l2"]
+                    ), 
+                    hp.Float(
+                        "activity_lstm_4_reg_value", 
+                        min_value=0, 
+                        max_value=0.5, 
+                        step=0.01
+                    )
+                )
+                recurrent_reg_lstm_4 = RegWrapper(
+                    hp.Choice(
+                        "recurrent_lstm_4_reg_type", ["l1", "l2", "l1l2"]
+                    ), 
+                    hp.Float(
+                        "recurrent_lstm_4_reg_value", 
+                        min_value=0, 
+                        max_value=0.5, 
+                        step=0.01
+                    )
+                )
+                if num_lstm_layers==4:
+                    model.add(
+                        LSTM(
+                            lstm_4_units, 
+                            return_sequences=False,
+                            kernel_regularizer=kernel_reg_lstm_4,
+                            bias_regularizer=bias_reg_lstm_4,
+                            activity_regularizer=activity_reg_lstm_4,
+                            recurrent_regularizer=recurrent_reg_lstm_4,
+                            dropout=hp.Float(
+                                "lstm_4_dropout_rate", 
+                                min_value=0.0, 
+                                max_value=0.8, 
+                                step=0.1
+                            )
+                        )
+                    )
     print("Adding first Dense layer...")
     dense_1_units = hp.Int(
         "dense_input_unit",
@@ -305,13 +454,76 @@ def build_model(
         max_value=512,
         step=16
     )
-
-    model.add(Dense(dense_1_units, activation=relu))
+    kernel_reg_dense_1 = RegWrapper(
+        hp.Choice("kernel_dense_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "kernel_dense_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    bias_reg_dense_1 = RegWrapper(
+        hp.Choice("bias_dense_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "bias_dense_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    activity_reg_dense_1 = RegWrapper(
+        hp.Choice("activity_dense_1_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "activity_dense_1_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    model.add(
+        Dense(
+            dense_1_units, 
+            activation=relu,
+            kernel_regularizer=kernel_reg_dense_1,
+            bias_regularizer=bias_reg_dense_1,
+            activity_regularizer=activity_reg_dense_1
+        )
+    )
     
     print("Adding second Dense layer...")
-    
-    model.add(Dense(1))
-
+    kernel_reg_dense_2 = RegWrapper(
+        hp.Choice("kernel_dense_2_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "kernel_dense_2_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    bias_reg_dense_2 = RegWrapper(
+        hp.Choice("bias_dense_2_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "bias_dense_2_reg_value", min_value=0, max_value=0.5, step=0.01
+        )
+    )
+    activity_reg_dense_2 = RegWrapper(
+        hp.Choice("activity_dense_2_reg_type", ["l1", "l2", "l1l2"]), 
+        hp.Float(
+            "activity_dense_2_reg_value", 
+            min_value=0, 
+            max_value=0.5, 
+            step=0.01
+        )
+    )
+    model.add(
+        Dense(
+            1,
+            kernel_regularizer=kernel_reg_dense_2,
+            bias_regularizer=bias_reg_dense_2,
+            activity_regularizer=activity_reg_dense_2
+        )
+    )
     print("Compiling model...")
     lr = hp.Float(
         "lr", 
@@ -320,34 +532,27 @@ def build_model(
         step=1e-1
     )
     model.compile(
-        loss='mse', 
+        loss="mse", 
         optimizer=Adam(learning_rate=lr), 
         metrics=[RootMeanSquaredError()]
     )
     return model
 
-def forecast_lstm(model, batch_size, X):
-    X = X.reshape(1, 1, len(X))
-    yhat = model.predict(X, batch_size=batch_size)
-    model.reset_states()
-    return yhat[0,0]
-
-#lstm_model = fit_lstm(batch_size=24, num_epochs=100, neurons1=128, neurons2=256)
+num_epochs=300
+num_batch_size=24
 
 tuner = kt.Hyperband(
     build_model,
     objective="val_loss",
-    max_epochs=100,
-    overwrite=True
+    max_epochs=num_epochs,
+    overwrite=True,
+    hyperband_iterations=5
 )
 
 reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.2,
-                              patience=5, min_lr=0.001)
+                              patience=5, min_lr=0.0001)
 
 print("Fitting network...")
-
-num_epochs=300
-num_batch_size=24
 
 start = time.time()
 tuner.search(
@@ -366,27 +571,23 @@ print(
     f"Time taken to search models: {str(datetime.timedelta(seconds=end-start))}"
 )
 
-best_hps=tuner.get_best_hyperparameters(num_trials=1)[0]
-
-best_model = tuner.hypermodel.build(best_hps)
-
-history = best_model.fit(X_train, y_train, epochs=num_epochs, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
-
-val_loss_per_epoch = history.history["val_loss"]
-best_epoch = val_loss_per_epoch.index(max(val_loss_per_epoch)) + 1
-print("Best epoch: %d" % (best_epoch,))
+best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
 
 hypermodel = tuner.hypermodel.build(best_hps)
-hypermodel_history = hypermodel.fit(X_train, y_train, epochs=best_epoch, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
 
-hypermodel.save("models/hypermodel.h5")
+hypermodel_history = hypermodel.fit(X_train, y_train, epochs=num_epochs, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
 
-pdb.set_trace()
+hypermodel.save("models/hypermodel_Jul28.h5")
 
 pyplot.plot(hypermodel_history.history["loss"], label="train")
 pyplot.plot(hypermodel_history.history["val_loss"], label="test")
 pyplot.legend()
-pyplot.show()  
+pyplot.savefig("models/val_loss_Jul28.png")
+pyplot.show()
+
+pdb.set_trace()
+
+
 
 
 
