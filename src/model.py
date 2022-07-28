@@ -1,4 +1,5 @@
 import datetime
+from gc import callbacks
 import keras_tuner as kt
 import numpy as np
 import os
@@ -7,7 +8,7 @@ import pdb
 import time
 
 from keras.activations import relu
-from keras.callbacks import ReduceLROnPlateau
+from keras.callbacks import ReduceLROnPlateau, EarlyStopping
 from keras.layers import Dense, LSTM
 from keras.metrics import RootMeanSquaredError, Accuracy
 from keras.models import Sequential
@@ -17,15 +18,35 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, MinMaxScaler
 from tensorflow.keras.optimizers import Adam
 
-# Changes directory to src
-abspath = os.path.abspath(__file__)
-dname = os.path.dirname(abspath)
-os.chdir(dname)
+def CreateLags(df, colname, num_lags):
+    for lag in range(1, num_lags+1):
+        new_colname = colname + "_(t-" + str(lag) + ")"
+        df[new_colname] = df[colname].shift(lag).fillna(0)
+    return df
 
-from utils import *
+def EncodeCyclical(df, colname):
+    max_val = df[colname].max()
+    df["sin_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
+    df["cos_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
+    df.drop(colname, axis=1)
+    return df
 
-# Change back to project root directory
-os.chdir("../")
+
+def RangeList(n):
+    return list(range(n))
+
+def RemoveItem(item_list, full_list):
+    for item in item_list:
+        full_list.remove(item)
+    return full_list
+
+def RegWrapper(reg_type, reg_value):
+    if reg_type == "l1":
+        return L1(reg_value)
+    if reg_type == "l2":
+        return L2(reg_value)
+    if reg_type == "l1l2":
+        return L1L2(reg_value)
 
 sk_holidays = []
 
@@ -107,8 +128,8 @@ num_cols_excl_time = RemoveItem(time_features_colnum, RangeList(num_num_cols))
 X_train, X_test, y_train, y_test = train_test_split(
     X, 
     y, 
-    train_size=round((df_arr.shape[0]/24)*0.8)*24,
-    test_size=round((df_arr.shape[0]/24)*(1-0.8))*24,
+    train_size=round((df_arr.shape[0]/24)*0.7)*24,
+    test_size=round((df_arr.shape[0]/24)*(1-0.7))*24,
     shuffle=False
 )
 
@@ -158,7 +179,6 @@ def build_model(
 
     print("Building model...")
     model = Sequential()
-    print("Adding first LSTM layer...")
     lstm_1_units = hp.Int(
         "lstm_1_input_unit", 
         min_value=16, 
@@ -196,40 +216,24 @@ def build_model(
             step=0.01
         )
     )
-    if num_lstm_layers == 1:
-        model.add(
-            LSTM(
-                lstm_1_units, 
-                return_sequences=False,
-                kernel_regularizer=kernel_reg_lstm_1,
-                bias_regularizer=bias_reg_lstm_1,
-                activity_regularizer=activity_reg_lstm_1,
-                recurrent_regularizer=recurrent_reg_lstm_1,
-                dropout=hp.Float(
-                    "lstm_1_dropout_rate", 
-                    min_value=0.0, 
-                    max_value=0.8, 
-                    step=0.1
-                )
+    print("Adding first LSTM layer...")
+    model.add(
+        LSTM(
+            lstm_1_units, 
+            return_sequences=True,
+            kernel_regularizer=kernel_reg_lstm_1,
+            bias_regularizer=bias_reg_lstm_1,
+            activity_regularizer=activity_reg_lstm_1,
+            recurrent_regularizer=recurrent_reg_lstm_1,
+            dropout=hp.Float(
+                "lstm_1_dropout_rate", 
+                min_value=0.0, 
+                max_value=0.8, 
+                step=0.1
             )
         )
+    )
     if num_lstm_layers > 1:
-        model.add(
-            LSTM(
-                lstm_1_units, 
-                return_sequences=True,
-                kernel_regularizer=kernel_reg_lstm_1,
-                bias_regularizer=bias_reg_lstm_1,
-                activity_regularizer=activity_reg_lstm_1,
-                recurrent_regularizer=recurrent_reg_lstm_1,
-                dropout=hp.Float(
-                    "lstm_1_dropout_rate", 
-                    min_value=0.0, 
-                    max_value=0.8, 
-                    step=0.1
-                )
-            )
-        )
         lstm_2_units = hp.Int(
             "lstm_2_input_unit", 
             min_value=16, 
@@ -271,8 +275,8 @@ def build_model(
                 step=0.01
             )
         )
-        print("Adding second LSTM layer...") 
         if num_lstm_layers==2:
+            print("Adding second LSTM layer...") 
             model.add(
                 LSTM(
                     lstm_2_units, 
@@ -290,6 +294,7 @@ def build_model(
                 )
             )
         if num_lstm_layers>2:
+            print("Adding second LSTM layer...") 
             model.add(
                 LSTM(
                     lstm_2_units, 
@@ -306,7 +311,6 @@ def build_model(
                     )
                 )
             )
-            print("Adding third LSTM layer...")
             lstm_3_units = hp.Int(
                 "lstm_3_input_unit", 
                 min_value=16, 
@@ -349,6 +353,7 @@ def build_model(
                     step=0.01
                 )
             )
+            print("Adding third LSTM layer...")
             if num_lstm_layers==3:
                 model.add(
                     LSTM(
@@ -430,26 +435,25 @@ def build_model(
                         step=0.01
                     )
                 )
-                if num_lstm_layers==4:
-                    model.add(
-                        LSTM(
-                            lstm_4_units, 
-                            return_sequences=False,
-                            kernel_regularizer=kernel_reg_lstm_4,
-                            bias_regularizer=bias_reg_lstm_4,
-                            activity_regularizer=activity_reg_lstm_4,
-                            recurrent_regularizer=recurrent_reg_lstm_4,
-                            dropout=hp.Float(
-                                "lstm_4_dropout_rate", 
-                                min_value=0.0, 
-                                max_value=0.8, 
-                                step=0.1
-                            )
+                model.add(
+                    LSTM(
+                        lstm_4_units, 
+                        return_sequences=False,
+                        kernel_regularizer=kernel_reg_lstm_4,
+                        bias_regularizer=bias_reg_lstm_4,
+                        activity_regularizer=activity_reg_lstm_4,
+                        recurrent_regularizer=recurrent_reg_lstm_4,
+                        dropout=hp.Float(
+                            "lstm_4_dropout_rate", 
+                            min_value=0.0, 
+                            max_value=0.8, 
+                            step=0.1
                         )
                     )
+                )
     print("Adding first Dense layer...")
     dense_1_units = hp.Int(
-        "dense_input_unit",
+        "dense_1_input_unit",
         min_value=16, 
         max_value=512,
         step=16
@@ -527,30 +531,37 @@ def build_model(
     print("Compiling model...")
     lr = hp.Float(
         "lr", 
-        min_value=1e-4,
+        min_value=1e-5,
         max_value=1,
         step=1e-1
     )
     model.compile(
         loss="mse", 
-        optimizer=Adam(learning_rate=lr), 
-        metrics=[RootMeanSquaredError()]
+        optimizer=Adam(learning_rate=lr)
     )
     return model
 
 num_epochs=300
 num_batch_size=24
 
-tuner = kt.Hyperband(
+tuner = kt.RandomSearch(
     build_model,
+    max_trials=10,
+    executions_per_trial=2,
     objective="val_loss",
-    max_epochs=num_epochs,
-    overwrite=True,
-    hyperband_iterations=5
+    directory="models/hypermodel_dir/",
+    project_name="Jul28_random1",
+    overwrite=True
 )
 
 reduce_lr = ReduceLROnPlateau(monitor="val_loss", factor=0.2,
-                              patience=5, min_lr=0.0001)
+                              patience=5, min_lr=0.000001)
+
+#early_stop = EarlyStopping(
+#    monitor="val_loss", 
+#    verbose=2, 
+#    mode="min"
+#)
 
 print("Fitting network...")
 
@@ -571,18 +582,34 @@ print(
     f"Time taken to search models: {str(datetime.timedelta(seconds=end-start))}"
 )
 
+tuner.results_summary(num_trials=1)
+
+pdb.set_trace()
+
+tuner.reload()
+
 best_hps = tuner.get_best_hyperparameters(num_trials=1)[0]
+
+best_model = tuner.hypermodel.build(best_hps)
+
+hypermodel_history = best_model.fit(X_train, y_train, epochs=num_epochs, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
+
+val_loss_per_epoch = hypermodel_history.history["val_loss"]
+best_epoch = val_loss_per_epoch.index(min(val_loss_per_epoch)) + 1
+print("Best epoch: %d" % (best_epoch,))
 
 hypermodel = tuner.hypermodel.build(best_hps)
 
-hypermodel_history = hypermodel.fit(X_train, y_train, epochs=num_epochs, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
+#hypermodel_history = hypermodel.fit(X_train, y_train, epochs=best_epoch, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False)
 
-hypermodel.save("models/hypermodel_Jul28.h5")
+hypermodel_history = hypermodel.fit(X_train, y_train, epochs=num_epochs, batch_size=num_batch_size, validation_data=(X_test, y_test), verbose=2, shuffle=False, callbacks = [reduce_lr])
+
+hypermodel.save("models/hypermodel_Jul28_random1.h5")
 
 pyplot.plot(hypermodel_history.history["loss"], label="train")
 pyplot.plot(hypermodel_history.history["val_loss"], label="test")
 pyplot.legend()
-pyplot.savefig("models/val_loss_Jul28.png")
+pyplot.savefig("models/val_loss_Jul28_random1.png")
 pyplot.show()
 
 pdb.set_trace()

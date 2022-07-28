@@ -13,6 +13,7 @@ import seaborn
 import sys
 import time
 
+from keras.regularizers import L1, L2, L1L2
 from os import listdir
 
 active_power_aliases = {
@@ -298,33 +299,3 @@ def apply_fill_missing_vals(df, colnames):
     for colname in colnames:
         df[colname] = fill_missing_vals(df, colname)
     return df
-
-def CreateLags(df, colname, num_lags):
-    for lag in range(1, num_lags+1):
-        new_colname = colname + "_(t-" + str(lag) + ")"
-        df[new_colname] = df[colname].shift(lag).fillna(0)
-    return df
-
-def EncodeCyclical(df, colname):
-    max_val = df[colname].max()
-    df["sin_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
-    df["cos_"+colname] = np.sin(2 * np.pi * df[colname]/max_val)
-    df.drop(colname, axis=1)
-    return df
-
-
-def RangeList(n):
-    return list(range(n))
-
-def RemoveItem(item_list, full_list):
-    for item in item_list:
-        full_list.remove(item)
-    return full_list
-
-def RegWrapper(reg_type, reg_value):
-    if reg_type == "l1":
-        return L1(reg_value)
-    if reg_type == "l2":
-        return L2(reg_value)
-    if reg_type == "l1l2":
-        return L1L2(reg_value)
